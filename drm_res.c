@@ -11,6 +11,15 @@
 
 #include <log.h>
 
+typedef struct device {
+	int fd;
+
+	drmModeResPtr res;
+	drmModePlaneResPtr plane_res;
+	drmModeConnectorPtr connectors; 
+	
+}device_t;
+
 //Turn the connection status into a nice looking string
 static const char *drm_get_conn(drmModeConnection connection) {
 	switch(connection) {
@@ -22,6 +31,7 @@ static const char *drm_get_conn(drmModeConnection connection) {
 		default:
 			return "Unknown";
 	}
+
 }
 
 //return the drm connector type as a string 
@@ -66,23 +76,45 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
+	drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
+
+	drmModePlaneResPtr planes_res = drmModeGetPlaneResources(fd);
 	drmModeResPtr resources = drmModeGetResources(fd); 
-	if(resources == NULL) {
+	if(resources == NULL || planes_res == NULL) {
 		logger_fatal("Failed to get drm resources");
 		close(fd);
 		return 1;
 	}
-	
+	logger_debug("%d", planes_res->count_planes);
 	logger_info("Got Drm Resources %d connctors detected", resources->count_connectors);
 	
 	drmModeConnectorPtr *connectors = calloc(resources->count_connectors, sizeof(drmModeConnectorPtr));
 	uint32_t size = 0;
-
 	if(connectors == NULL) {
 		drmModeFreeResources(resources);
 		close(fd);
 		return 1;
 	}
+	
+	drmModePlanePtr *planes = calloc(planes_res->count_planes, sizeof(drmModePlane));
+	if(planes == NULL) {
+		drmModeFreeResources(resources);
+		close(fd);
+		return 1;
+	}
+
+	for(int i = 0; i < planes_res->count_planes; i++) {
+		planes[i] = drmModeGetPlane(fd, planes_res->planes[i]);
+		logger_info("ID: %d, CRTC: %d, CRTC_X: %d, CRTC_Y: %d, X: %d Y: %d\nFormat Count: %d, FB: %d, GAMMA Size: %d CRTCS: %d\
+				",
+				planes[i]->plane_id, planes[i]->crtc_id, planes[i]->crtc_x, 
+				planes[i]->crtc_y, planes[i]->x, planes[i]->y, planes[i]->count_formats,
+				planes[i]->fb_id, planes[i]->gamma_size, planes[i]->possible_crtcs);	
+		for(int j = 0; j < planes[i]->count_formats; j++) {
+			logger_info("%4.4s", &planes[i]->formats[j]);
+		}
+	}
+
 
 	for(uint32_t i = 0; i < resources->count_connectors; i++) {
 		connectors[size] = drmModeGetConnector(fd, resources->connectors[i]);

@@ -33,9 +33,9 @@ void logger_set_silenced(bool silenced);
 void logger_set_level(uint32_t type);
 
 //easier ways to call logging function 
-#define logger_debug(...) logger_log(LOGGER_DEBUG, __LINE__, __func__, __VA_ARGS__)
-#define logger_info(...) logger_log(LOGGER_INFO, __LINE__, __func__, __VA_ARGS__)
-#define logger_warn(...) logger_log(LOGGER_WARN, __LINE__, __func__, __VA_ARGS__)
-#define logger_error(...) logger_log(LOGGER_ERROR, __LINE__, __func__, __VA_ARGS__)
-#define logger_fatal(...) logger_log(LOGGER_FATAL, __LINE__, __func__, __VA_ARGS__)
+#define logger_debug(...) logger_log(LOGGER_DEBUG, __LINE__, __FILE_NAME__, __VA_ARGS__)
+#define logger_info(...) logger_log(LOGGER_INFO, __LINE__, __FILE_NAME__, __VA_ARGS__)
+#define logger_warn(...) logger_log(LOGGER_WARN, __LINE__, __FILE_NAME__, __VA_ARGS__)
+#define logger_error(...) logger_log(LOGGER_ERROR, __LINE__, __FILE_NAME__, __VA_ARGS__)
+#define logger_fatal(...) logger_log(LOGGER_FATAL, __LINE__, __FILE_NAME__, __VA_ARGS__)
 

@@ -13,33 +13,32 @@
 #include <stdlib.h>
 #include <log.h>
 
+#include <string.h>
+#include <memory.h>
+
 #include <sys/mman.h>
 #include <stdio.h>
-
-typedef struct output {
-	drmModeConnectorPtr connector;
-	drmModeCrtcPtr new_crtc;
-	drmModeEncoderPtr encoder;
-	drmModeCrtcPtr saved_crtc;
-	uint32_t *buffer;
-	size_t buffer_size;
-	uint32_t fb_id;
-	drmModeModeInfo mode; 
-}output_t;
-
 
 typedef struct drm {
 	int fd;
 	
 	struct gbm_device *gbm_dev;
-	struct gbm_surface *surface;
+	struct gbm_bo *bo;
+	uint32_t handle;
+	uint32_t pitch;
+	uint32_t fb;
+	uint32_t height;
+	uint32_t width;
+	uint32_t bpp;
+
 	drmModeResPtr res;
 	drmModeConnectorPtr connector;
 	drmModeEncoderPtr encoder;
 	drmModeCrtcPtr crtc;
 	drmModeModeInfo mode;
-	//output_t out;
-	//drmModeResPtr res;
+
+	void *buffer;
+	void *map_data;
 }drm_t;
 
 /* Open a drm device and return the fd 
@@ -82,15 +81,31 @@ int open_drm(const char *path, uint64_t cap) {
  * device to be cleaned
  */
 void drm_cleanup(drm_t *dev) {
-	if(!dev->connector) {
+	if(dev->buffer) {
+		gbm_bo_unmap(dev->bo, dev->buffer);
+	}
+
+	if(dev->bo) {
+		gbm_bo_destroy(dev->bo);
+	}
+	
+	if(dev->crtc) {
+		drmModeFreeCrtc(dev->crtc);
+	}
+
+	if(dev->encoder) {
+		drmModeFreeEncoder(dev->encoder);
+	}
+
+	if(dev->connector) {
 		drmModeFreeConnector(dev->connector);
 	}
 
-	if(!dev->res) {
+	if(dev->res) {
 		drmModeFreeResources(dev->res);
 	}
 	
-	if(!dev->gbm_dev) {
+	if(dev->gbm_dev) {
 		gbm_device_destroy(dev->gbm_dev);
 	}
 
@@ -131,10 +146,11 @@ drm_t *init_drm() {
 		dev->connector = drmModeGetConnector(dev->fd, dev->res->connectors[i]);
 		if(dev->connector == NULL) {
 			continue;
-		} else if(dev->connector->connection == DRM_MODE_CONNECTED) {
+		} else if(dev->connector->connection == DRM_MODE_CONNECTED && dev->connector->count_modes > 0) {
 			break;
 		}
 		drmModeFreeConnector(dev->connector);
+		dev->connector = NULL;
 	}
 
 	if(!dev->connector) {
@@ -146,48 +162,67 @@ drm_t *init_drm() {
 	dev->encoder = drmModeGetEncoder(dev->fd, dev->connector->encoder_id);
 	if(!dev->encoder) {
 		logger_fatal("Failed to get encoder");
+		drm_cleanup(dev);
 		return NULL;
 	}
 	
 	dev->crtc = drmModeGetCrtc(dev->fd, dev->encoder->crtc_id);
 	if(!dev->crtc) {
 		logger_fatal("Failed to get crtc");
+		drm_cleanup(dev);
 		return NULL;
 	}
 	
-	if(dev->connector->count_modes == 0) {
-		logger_fatal("connector has no modes");
+	dev->mode = dev->connector->modes[0];
+		
+	dev->bo = gbm_bo_create(dev->gbm_dev, dev->mode.hdisplay, dev->mode.vdisplay, GBM_BO_FORMAT_XRGB8888, GBM_BO_USE_SCANOUT | GBM_BO_USE_WRITE);
+	if(!dev->bo) {
+		logger_fatal("Failed to create GBM_BO");
 		drm_cleanup(dev);
 		return NULL;
 	}
 
-	dev->mode = dev->connector->modes[0];
-		
-	struct gbm_bo *bo = gbm_bo_create(dev->gbm_dev, dev->mode.hdisplay, dev->mode.vdisplay, GBM_BO_FORMAT_XRGB8888, 0);
-	if(!bo) {
-		logger_fatal("Surface failed to create");
+	//Get the handle and pitch for the bo 
+	dev->handle = gbm_bo_get_handle (dev->bo).u32;
+	dev->pitch = gbm_bo_get_stride (dev->bo);
+	
+	//Get info about this bo 
+	dev->bpp = gbm_bo_get_bpp(dev->bo);
+	dev->height = gbm_bo_get_height(dev->bo);
+	dev->width = gbm_bo_get_width(dev->bo);
+
+	logger_info("%p %p", dev->buffer, dev->map_data);
+	drmModeAddFB(dev->fd, dev->mode.hdisplay, dev->mode.vdisplay, 24, 32, dev->pitch, dev->handle, &dev->fb);		
+	
+	//Map the buffer so we can edit it 
+	dev->buffer = gbm_bo_map(dev->bo, 0, 0, dev->width, dev->height, 
+			GBM_BO_TRANSFER_READ_WRITE, &dev->pitch, (void **) &dev->map_data);
+	
+	if(dev->buffer == NULL) {
+		logger_fatal("Failed to map gbm bo");
 		drm_cleanup(dev);
 		return NULL;
 	}
-	logger_info("Here");
-	//Get the buffer 
+
+	logger_info("Map Data: %p\nBuffer: %p", dev->map_data, dev->buffer);
+	drmModeSetCrtc(dev->fd, dev->crtc->crtc_id, dev->fb, 0, 0, &dev->connector->connector_id, 1, &dev->mode);
 	
-	if(!bo) {
-		logger_fatal("Failed to create buffer object");
-		return NULL;
+	//Draw Gradient 
+	for(int i = 0; i < dev->height; i++) {
+		for(int j = 0; j < dev->width; j++) {
+			uint8_t color = 0xff * (i * j) / (dev->height * dev->width);
+			*(uint32_t *)(dev->buffer + i * (dev->pitch) + j * 4) = color | (color << 16);
+		}
 	}
-	//Get the handle and pitch for the bo 
-	uint32_t handle = gbm_bo_get_handle (bo).u32;
-	uint32_t pitch = gbm_bo_get_stride (bo);
-	uint32_t fb;
 	
-	logger_info("%p %p", dev->crtc, dev->encoder);
-	drmModeAddFB(dev->fd, dev->mode.hdisplay, dev->mode.vdisplay, 24, 32, pitch, handle, &fb);		
-	
-	drmModeSetCrtc(dev->fd, dev->crtc->crtc_id, fb, 0, 0, &dev->connector->connector_id, 1, &dev->mode);
-	
+	//Unmap the buffer 
+	gbm_bo_unmap(dev->bo, (void *)dev->buffer);
+
+	//Sleep for 4 seconds so we have a chance to see what's on 
+	//screen
 	sleep(4);
 	
+	//reset the original CRTC 
 	drmModeSetCrtc(dev->fd, dev->crtc->crtc_id, dev->crtc->buffer_id, dev->crtc->x, dev->crtc->y, &dev->connector->connector_id, 1, &dev->crtc->mode);
 	return dev;
 }

@@ -203,10 +203,11 @@ drm_t *init_drm() {
 
 	//TODO Draw something not sure what yet maybe try like a PNG though because that 
 	//would be cool
+	//based on 
 	for (int i = 0; i < creq.height; i++) {
 		for (int j = 0; j < creq.width; j++) {
-			uint8_t color = (double) (i * j) / (creq.height * creq.width) * 0xFF;
-			*(dev->out.buffer + i * creq.width + j) = (uint32_t) 0xFFFFFF & (0x00 << 16 | color << 8 | color);
+			uint8_t color = 0xFF * (i * j) / (creq.height * creq.width);
+			*(dev->out.buffer + i * creq.width + j) = (color << 16 | color);
 		}
 	}
 

@@ -14,6 +14,8 @@
 #include <sys/mman.h>
 #include <stdio.h>
 
+#include "./common/buffers.h"
+
 typedef struct output {
 	drmModeConnectorPtr connector;
 	drmModeCrtcPtr new_crtc;
@@ -156,42 +158,19 @@ drm_t *init_drm() {
 	 */
 	/*TODO: Move this code to it's own function*/
 	dev->out.mode = dev->out.connector->modes[0];
-
-	struct drm_mode_create_dumb creq = { 0 };
-	struct drm_mode_map_dumb mreq = { 0 };
 	
-	creq.bpp = 32;
-	creq.height = dev->out.mode.vdisplay;
-	creq.width = dev->out.mode.hdisplay;
-
-	if(drmIoctl(dev->fd, DRM_IOCTL_MODE_CREATE_DUMB, &creq) < 0) {
-		logger_fatal("Failed to create DRM Dumb buffer");
-		drm_cleanup(dev);
-		return NULL;
-	}
+	bo_t *bo = buffer_create_dumb(dev->fd, 32, dev->out.mode.vdisplay, dev->out.mode.hdisplay);
+	logger_info("BO: %p", bo);
 	
-
-	if(drmModeAddFB(dev->fd, creq.width, creq.height, 24, 32, creq.pitch, creq.handle, &dev->out.fb_id)) {
+	if(drmModeAddFB(dev->fd, bo->width, bo->height, 24, 32, bo->pitch, bo->handle, &dev->out.fb_id)) {
 		logger_fatal("Failed to add DRM FB");
 		drm_cleanup(dev);
 		return NULL; 
 	}
 
-	mreq.handle = creq.handle;
-	if(drmIoctl(dev->fd, DRM_IOCTL_MODE_MAP_DUMB, &mreq)) {
-		logger_fatal("Failed to map dumb buffer");
-		drm_cleanup(dev);
-		return NULL;
-	}
-
-	dev->out.buffer_size = creq.size; //save this for freeing later
-	dev->out.buffer = (uint32_t *) mmap(0, creq.size, PROT_READ | PROT_WRITE, MAP_SHARED, dev->fd, mreq.offset);
-	if(dev->out.buffer == MAP_FAILED) {
-		logger_fatal("Failed to memory map code into user space");
-		drm_cleanup(dev);
-		return NULL;
-	}
-
+	dev->out.buffer_size = bo->size; //save this for freeing later
+	bo_map(dev->fd, bo);
+	dev->out.buffer = bo->buffer;
 	if(drmModeSetCrtc(dev->fd, 
 				dev->out.saved_crtc->crtc_id, dev->out.fb_id, 0, 0, 
 				&dev->out.connector->connector_id, 1, &dev->out.mode)) {
@@ -204,10 +183,10 @@ drm_t *init_drm() {
 	//TODO Draw something not sure what yet maybe try like a PNG though because that 
 	//would be cool
 	//based on 
-	for (int i = 0; i < creq.height; i++) {
-		for (int j = 0; j < creq.width; j++) {
-			uint8_t color = 0xFF * (i * j) / (creq.height * creq.width);
-			*(dev->out.buffer + i * creq.width + j) = (color << 16 | color);
+	for (int i = 0; i < bo->height; i++) {
+		for (int j = 0; j < bo->width; j++) {
+			uint8_t color = 0xFF * (i * j) / (bo->height * bo->width);
+			*(dev->out.buffer + i * bo->width + j) = (color << 16 | color);
 		}
 	}
 

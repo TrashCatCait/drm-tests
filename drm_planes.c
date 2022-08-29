@@ -202,7 +202,10 @@ drm_t *init_drm() {
 		drm_cleanup(dev);
 		return NULL;
 	}
-	
+
+
+	//This is obviusly very dumb as I don't ever check that planes actually exist.
+	//but I know on my hardware they do and that this will work
 	drmModeSetPlane(dev->fd, dev->pres->planes[0], dev->out.saved_crtc->crtc_id, dev->out.saved_crtc->buffer_id, 
 			0, 50, 50, 320, 320, 100 << 16, 150 << 16, 320 << 16, 320 << 16);
 

@@ -40,7 +40,7 @@ typedef struct drm_dev {
 
 //Cleanup the drm device
 void drm_clean_up(drm_dev_t *dev) {
-
+	
 	for(int i = 0; i < dev->res->count_connectors; i++) {
 		drmModeFreeEncoder(dev->connector[i].enc);
 		drmModeFreeCrtc(dev->connector[i].crtc);
@@ -174,6 +174,7 @@ drm_dev_t *drm_init(const char *dev_path, uint64_t caps) {
 		}
 	}
 
+	
 	dev->encoders = calloc(dev->res->count_encoders, sizeof(drmModeEncoderPtr));
 	for(int i = 0; i < dev->res->count_encoders; i++) {
 		dev->encoders[i] = drmModeGetEncoder(dev->fd, dev->res->encoders[i]);
@@ -329,12 +330,21 @@ void drm_dump_connector(connector_t connector) {
 	}
 }
 
-void drm_dump_planes(drmModePlanePtr plane) {
+
+void drm_dump_planes(int fd, drmModePlanePtr plane) {
 	logger_info("%-9s | %-6s | %-9s | %-8s | %-6s | %-9s | %-5s | %-5s |", "Plane ID:", "FB ID:", "Formats:", "CRTC ID:", "CRTCs:", "Gamma Sz:", "Xpos:", "Ypos:");
 	logger_info("%-9d | %-6d | %-9d | %-8d | %-6d | %-9d | %-5d | %-5d | %d | %d", 
 			plane->plane_id, plane->fb_id, plane->count_formats, plane->crtc_id,
 			plane->possible_crtcs, plane->gamma_size, plane->x, plane->y, 
 			plane->crtc_x, plane->crtc_y);
+	
+	drmModeObjectPropertiesPtr objs = drmModeObjectGetProperties(fd, plane->plane_id, DRM_MODE_OBJECT_PLANE);
+	for(int i = 0; i < objs->count_props; i++) {
+		drmModePropertyPtr prop = drmModeGetProperty(fd, objs->props[i]);
+		logger_info("%s %lu %lu %lu",prop->name, prop->count_values, objs->count_props > i ? objs->prop_values[i] : 0, DRM_PLANE_TYPE_CURSOR);
+		
+		drmModeFreeProperty(prop);
+	}
 
 	logger_info("Formats:");	
 	for(int i = 0; i < plane->count_formats; i++) {
@@ -361,6 +371,7 @@ void drm_dump_version(drmVersionPtr ver) {
 
 void drm_connector_dump_modes(drmModeConnectorPtr conn) {
 	if(conn) {
+		
 		logger_info("Modes:");
 		for(int i = 0; i < conn->count_modes; i++) {
 			logger_info("\t%dx%d@%dHz", conn->modes[i].hdisplay, conn->modes[i].vdisplay, conn->modes[i].vrefresh);
@@ -391,7 +402,7 @@ int main(int argc, char **argv) {
 	}
 
 	for(int i = 0; i < dev->pres->count_planes; i++) {
-		drm_dump_planes(dev->planes[i]);
+		drm_dump_planes(dev->fd, dev->planes[i]);
 	}
 	logger_info("Encoders: ");
 	logger_info("%-7s | %-7s | %-7s | %-7s", "ENC ID:", "Type:", "CRTCs:", "Clones:");

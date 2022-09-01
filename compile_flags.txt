@@ -2,3 +2,5 @@
 /usr/include/libdrm 
 -I 
 ./logger
+-I 
+./common

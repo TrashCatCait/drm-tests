@@ -230,6 +230,7 @@ drm_t *init_drm() {
 int main(int argc, char **argv) {
 	void *var = init_drm();
 
+
 	if(var != NULL) drm_cleanup(var);
 	return 0;
 }

@@ -20,6 +20,7 @@ typedef struct bo {
 	uint64_t offset;
 } bo_t;
 
+int buffer_destroy_dumb(int fd, bo_t *bo);
 bo_t *buffer_create_dumb(int fd, uint32_t bpp, uint32_t height, uint32_t width);
-
 int bo_map(int fd, bo_t *bo);
+void buffer_unmap(bo_t *bo); 

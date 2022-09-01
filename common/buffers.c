@@ -11,12 +11,17 @@
 #include "drm.h"
 #include "drm_mode.h"
 
-void buffer_destroy_dumb(bo_t *bo) {
+int buffer_destroy_dumb(int fd, bo_t *bo) {
 	struct drm_mode_destroy_dumb dreq;
 	memset(&dreq, 0, sizeof(dreq));
 
 	dreq.handle = bo->handle;
+	if(drmIoctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dreq)) {
+		logger_error("Failed to destroy dumb buffer");
+		return 1;
+	}
 
+	return 0;
 }
 
 bo_t *buffer_create_dumb(int fd, uint32_t bpp, uint32_t height, uint32_t width) {

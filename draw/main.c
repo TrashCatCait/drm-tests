@@ -45,6 +45,14 @@ typedef struct drm_backend {
 	int out_count;
 } drm_backend_t;
 
+typedef struct bo_creq {
+	int fd; 
+	uint32_t height;
+	uint32_t width;
+	uint32_t bpp;
+	uint32_t flags;
+} bo_creq_t;
+
 void verbose(const char *fmt, ...) {
 	switch(g_verbose) {
 		case 1: {
@@ -61,32 +69,68 @@ int bo_map(bo_t *bo) {
 	struct drm_mode_map_dumb mreq = { 0 };
 	mreq.handle = bo->handle;
 
-	drmIoctl(bo->fd, DRM_IOCTL_MODE_MAP_DUMB, &mreq);
+	//Non of these should fail really if a correct bo type is passed in 
+	//but best to just check them 
+	if(drmIoctl(bo->fd, DRM_IOCTL_MODE_MAP_DUMB, &mreq) < 0) {
+		return -1;
+	}
 
 	bo->offset = mreq.offset;
 	bo->buffer = mmap(NULL, bo->size, PROT_READ | PROT_WRITE, MAP_SHARED, bo->fd, bo->offset);
-	
+	if(bo->buffer == MAP_FAILED) {
+		return -2;
+	}
+
 	return 0;
 }
 
-bo_t *bo_create(int fd) {
+bo_t *bo_create(bo_creq_t bo_info) {
 	bo_t *bo = calloc(1, sizeof(*bo)); 
-	struct drm_mode_create_dumb creq = { 0 };
-	creq.height = 1080;
-	creq.bpp = 32;
-	creq.width = 1920;
+	if(bo == NULL) {
+		NULL;
+	}
 
-	drmIoctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &creq);
-	
+	struct drm_mode_create_dumb creq = { 0 };
+	creq.height = bo_info.height;
+	creq.bpp = bo_info.bpp;
+	creq.width = bo_info.width;
+	creq.flags = bo_info.flags;
+
+	if(drmIoctl(bo_info.fd, DRM_IOCTL_MODE_CREATE_DUMB, &creq) < 0) {
+		NULL; 
+	}
+
 	bo->width = creq.width;
 	bo->bpp = creq.bpp;
 	bo->height = creq.height;
 	bo->size = creq.size;
 	bo->pitch = creq.pitch;
-	bo->fd = fd;
+	bo->fd = bo_info.fd;
 	bo->handle = creq.handle;
 	
 	return bo;
+}
+
+int bo_unmap(bo_t *bo) {
+	if(bo->buffer == NULL) {
+		return -1;
+	}
+
+	return munmap(bo->buffer, bo->size);
+}
+
+int bo_destroy(bo_t *bo) {
+	struct drm_mode_destroy_dumb dreq = { 0 };
+	dreq.handle = bo->handle;
+	
+	//This shouldn't really fail but just check in case the user has passed in a bad ptr 
+	if(drmIoctl(bo->fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dreq) < 0) {
+		return -1;
+	}
+	
+	//Free the bo 
+	free(bo);
+	return 0;
 }
 
 int drm_open(const char *path) {
@@ -142,11 +186,17 @@ outputs_t *drm_get_outputs(int fd, drmModeResPtr res) {
 
 	for(int i = 0; i < res->count_connectors; i++) {
 		outs[i].connector = drmModeGetConnector(fd, res->connectors[i]);
-
+		
 		if(outs[i].connector->connection == DRM_MODE_CONNECTED) {
+			drmModeModeInfo mode = outs[i].connector->modes[0];
+			bo_creq_t creq = { 0 };
+			creq.fd = fd;
+			creq.width = mode.hdisplay;
+			creq.bpp = 32;
+			creq.height = mode.vdisplay;
 			outs[i].encoder = drm_get_encoder(fd, outs[i].connector);
 			outs[i].saved_crtc = drm_get_crtc(fd, outs[i].encoder);
-			outs[i].bo = bo_create(fd);
+			outs[i].bo = bo_create(creq);
 		}
 	}
 
@@ -162,14 +212,14 @@ void draw(uint8_t *bfr, uint32_t height, uint32_t pitch) {
 }
 
 int drm_prepare_buffers(outputs_t *out) {
-	for(int i = 0; i < 2; i++) {
+	for(int i = 0; i < 4; i++) {
 		if(out[i].connector->connection == DRM_MODE_CONNECTED) {
-			drmModeAddFB(out[i].bo->fd, 1920, 1080, 24, 32, out[i].bo->pitch, out[i].bo->handle, &out[i].bo->id);
+			drmModeAddFB(out[i].bo->fd, 2560, 1440, 24, 32, out[i].bo->pitch, out[i].bo->handle, &out[i].bo->id);
 			bo_map(out[i].bo);
 			printf("\n%p\n", out[i].bo->buffer);
 			drmModeSetCrtc(out[i].bo->fd, out[i].saved_crtc->crtc_id, out[i].bo->id, 0, 0, &out[i].connector->connector_id, 1, &out[i].connector->modes[0]);
 			draw(out[i].bo->buffer, out[i].bo->height, out[i].bo->pitch);
-			sleep(10);
+			sleep(2);
 			drmModeSetCrtc(out[i].bo->fd, out[i].saved_crtc->crtc_id, out[i].saved_crtc->buffer_id, out[i].saved_crtc->x, out[i].saved_crtc->y, &out[i].connector->connector_id, 1, &out[i].saved_crtc->mode);
 						
 		}

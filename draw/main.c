@@ -12,6 +12,10 @@
 
 #include <sys/mman.h>
 #include <getopt.h>
+
+#include <cairo/cairo.h>
+
+
 static int g_verbose = 0;
 static bool g_master = false;
 #define likely(x)       __builtin_expect((x),1)
@@ -28,6 +32,7 @@ typedef struct bo {
 	uint64_t size;
 	off_t offset;
 	void *buffer;
+	cairo_surface_t *csurf;
 } bo_t;
 
 typedef struct outputs {
@@ -167,12 +172,12 @@ drmModeEncoderPtr drm_get_encoder(int fd, drmModeConnectorPtr conn) {
 	if(conn->encoder_id) {
 		return drmModeGetEncoder(fd, conn->encoder_id);
 	}
-	return NULL;
+	return drmModeGetEncoder(fd, conn->encoders[0]);
 }
 
-drmModeCrtcPtr drm_get_crtc(int fd, drmModeEncoderPtr enc) {
-	if(enc->crtc_id) {
-		return drmModeGetCrtc(fd, enc->crtc_id);
+drmModeCrtcPtr drm_get_crtc(int fd, uint32_t crtc_id) {
+	if(crtc_id) {
+		return drmModeGetCrtc(fd, crtc_id);
 	}
 	return NULL;
 }
@@ -195,7 +200,7 @@ outputs_t *drm_get_outputs(int fd, drmModeResPtr res) {
 			creq.bpp = 32;
 			creq.height = mode.vdisplay;
 			outs[i].encoder = drm_get_encoder(fd, outs[i].connector);
-			outs[i].saved_crtc = drm_get_crtc(fd, outs[i].encoder);
+			outs[i].saved_crtc = drm_get_crtc(fd, outs[i].encoder->crtc_id);
 			outs[i].bo = bo_create(creq);
 		}
 	}
@@ -203,25 +208,97 @@ outputs_t *drm_get_outputs(int fd, drmModeResPtr res) {
 	return outs;
 }
 
-void draw(uint8_t *bfr, uint32_t height, uint32_t pitch) {
+void putpixel(bo_t *bo, int x, int y, uint8_t color) {
+	volatile uint8_t *buffer = (uint8_t *)bo->buffer;
+	buffer[(x * 4) + (y * bo->pitch)] = color;
+	buffer[((x * 4) + 1) + (y * bo->pitch)] = color;
+	buffer[((x * 4) + 2) + (y * bo->pitch)] = color;
+	buffer[((x * 4) + 3) + (y * bo->pitch)] = color;}
+
+#define RED 0xff 
+void drawCircle(bo_t *bo, int xc, int yc, int x, int y, uint8_t color)
+{
+    putpixel(bo, xc+x, yc+y, color);
+    putpixel(bo, xc-x, yc+y, color);
+    putpixel(bo, xc+x, yc-y, color);
+    putpixel(bo, xc-x, yc-y, color);
+    putpixel(bo, xc+y, yc+x, color);
+    putpixel(bo, xc-y, yc+x, color);
+    putpixel(bo, xc+y, yc-x, color);
+    putpixel(bo, xc-y, yc-x, color);
+}
+
+void drw_circle(bo_t *bo, int xc, int yc, int radius, uint8_t color) {
+	int x = 0;
+	int y = radius;
+	int d = 3 - 2 * radius;
+	drawCircle(bo, xc, yc, x, y, color);
+	while(x <= y) {
+		x++;
+		for(int yy = yc - y; yy < yc + y; yy++) {
+			for(int xx = xc - x; xx < xc + x; xx++) {
+				putpixel(bo, xx, yy, color);
+			}
+		}
+
+		for(int yy = yc - x; yy < yc + x; yy++) {
+			for(int xx = xc - y; xx < xc + y; xx++) {
+				putpixel(bo, xx, yy, color);
+			}
+		}
+		if(d > 0) { 
+			y--;
+	        d = d + 4 * (x - y) + 10;
+		} else {
+			d = d + 4 * x + 6;
+		}
+		drawCircle(bo, xc, yc, x, y, color);
+	}
+}
+
+
+void draw(bo_t *bo, uint32_t height, uint32_t pitch) {
 	for(int i = 0; i < height; i++) {
-		for(int x = 2; x < pitch; x += 4) {
-			bfr[(i * pitch) + x] = 0xff;
+		for(int x = 2; x < pitch / 4; x++) {
+			putpixel(bo, x, i, 0x28);
 		}
 	}
 }
 
-int drm_prepare_buffers(outputs_t *out) {
-	for(int i = 0; i < 4; i++) {
-		if(out[i].connector->connection == DRM_MODE_CONNECTED) {
-			drmModeAddFB(out[i].bo->fd, 2560, 1440, 24, 32, out[i].bo->pitch, out[i].bo->handle, &out[i].bo->id);
+int drm_prepare_buffers(int fd, outputs_t *out, int connectors) {
+	drmModeModeInfo mode;
+	drmModeConnectorPtr conn; 
+	bo_creq_t creq;
+
+	printf("%d\n", connectors);
+	for(int i = 0; i < connectors; i++) {
+		printf("%p %p\n", out[i].connector, &out[i]);
+		conn = out[i].connector;
+		if(conn->connection == DRM_MODE_CONNECTED) {
+			mode = conn->modes[0];
+			creq.fd = fd;
+			creq.bpp = 32;
+			creq.flags = 0;
+			creq.height = mode.vdisplay;
+			creq.width = mode.hdisplay;
+			out[i].bo = bo_create(creq);
+			printf("BO: %p\n", out[i].bo);
+			drmModeAddFB(out[i].bo->fd, mode.hdisplay, mode.vdisplay, 24, 32, out[i].bo->pitch, out[i].bo->handle, &out[i].bo->id);
 			bo_map(out[i].bo);
-			printf("\n%p\n", out[i].bo->buffer);
+			printf("Buffer: %p\n", out[i].bo->buffer);	
+			
+			out[i].bo->csurf = cairo_image_surface_create_for_data(out[i].bo->buffer, CAIRO_FORMAT_ARGB32, out[i].bo->width, out[i].bo->height, out[i].bo->pitch);
 			drmModeSetCrtc(out[i].bo->fd, out[i].saved_crtc->crtc_id, out[i].bo->id, 0, 0, &out[i].connector->connector_id, 1, &out[i].connector->modes[0]);
-			draw(out[i].bo->buffer, out[i].bo->height, out[i].bo->pitch);
-			sleep(2);
+			draw(out[i].bo, out[i].bo->height, out[i].bo->pitch);
+			drw_circle(out[i].bo, 200, 200, 100, 0x00);
+			drw_circle(out[i].bo, 200, 200, 90, 0xff);
+			drw_circle(out[i].bo, 200, 200, 20, 0x00);
+			drw_circle(out[i].bo, 400, 200, 100, 0x00); 
+			drw_circle(out[i].bo, 400, 200, 90, 0xff); 
+			drw_circle(out[i].bo, 400, 200, 20, 0x00);
+			cairo_surface_write_to_png(out[i].bo->csurf, "./image.png");
+			getchar();
 			drmModeSetCrtc(out[i].bo->fd, out[i].saved_crtc->crtc_id, out[i].saved_crtc->buffer_id, out[i].saved_crtc->x, out[i].saved_crtc->y, &out[i].connector->connector_id, 1, &out[i].saved_crtc->mode);
-						
 		}
 	}
 
@@ -243,7 +320,7 @@ int drm_init(const char *path) {
 			backend->res, backend->pres);
 	
 	backend->outputs = drm_get_outputs(backend->fd, backend->res);
-	drm_prepare_buffers(backend->outputs);
+	drm_prepare_buffers(backend->fd, backend->outputs, backend->res->count_connectors);
 	return 0;
 }
 
@@ -268,6 +345,8 @@ int main(int argc, char **argv) {
 			dev_path = optarg;
 			break;
 		case 'm':
+			//We want the master lock but allow the user
+			//to override as it's useful for 
 			g_master = 1;
 			break;
 		case 'v':

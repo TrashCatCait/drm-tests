@@ -119,7 +119,7 @@ drm_dev_t *drm_init(const char *dev_path, uint64_t caps) {
 		return NULL;
 	}
 
-	dev->fd = drm_open("/dev/dri/card0", DRM_CAP_DUMB_BUFFER);
+	dev->fd = drm_open(dev_path, DRM_CAP_DUMB_BUFFER);
 	if(dev->fd < 0) {
 		drm_clean_up(dev);
 		return NULL;

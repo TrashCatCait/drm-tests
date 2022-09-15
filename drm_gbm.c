@@ -65,12 +65,6 @@ int open_drm(const char *path, uint64_t cap) {
 		return -1;
 	}
 
-	ret = drmGetCap(fd, cap, &hasCap);
-	if(ret < 0 || !hasCap) {
-		logger_warn("DRM dev %s, does not support request capablities", path);
-		close(fd);
-		return -2;
-	}
 
 	return fd;
 }
@@ -115,13 +109,13 @@ void drm_cleanup(drm_t *dev) {
 	free(dev);
 }
 
-drm_t *init_drm() {
+drm_t *init_drm(const char *path) {
 	drm_t *dev = calloc(1, sizeof(*dev));
 	if(!dev) {
 		return NULL;
 	}
 
-	dev->fd = open_drm("/dev/dri/card0", DRM_CAP_DUMB_BUFFER);
+	dev->fd = open_drm(path, DRM_CAP_DUMB_BUFFER);
 	if(dev->fd < 0) {
 		drm_cleanup(dev);
 		return NULL;
@@ -159,14 +153,14 @@ drm_t *init_drm() {
 		return NULL;
 	}
 
-	dev->encoder = drmModeGetEncoder(dev->fd, dev->connector->encoder_id);
+	dev->encoder = drmModeGetEncoder(dev->fd, dev->connector->encoders[0]);
 	if(!dev->encoder) {
 		logger_fatal("Failed to get encoder");
 		drm_cleanup(dev);
 		return NULL;
 	}
 	
-	dev->crtc = drmModeGetCrtc(dev->fd, dev->encoder->crtc_id);
+	dev->crtc = drmModeGetCrtc(dev->fd, dev->res->crtcs[0]);
 	if(!dev->crtc) {
 		logger_fatal("Failed to get crtc");
 		drm_cleanup(dev);
@@ -174,10 +168,11 @@ drm_t *init_drm() {
 	}
 	
 	dev->mode = dev->connector->modes[0];
-		
-	dev->bo = gbm_bo_create(dev->gbm_dev, dev->mode.hdisplay, dev->mode.vdisplay, GBM_BO_FORMAT_XRGB8888, GBM_BO_USE_SCANOUT | GBM_BO_USE_WRITE);
+
+	logger_info("%s", gbm_device_get_backend_name(dev->gbm_dev));
+	dev->bo = gbm_bo_create(dev->gbm_dev, 2560, 1440, GBM_FORMAT_XRGB8888, GBM_BO_USE_SCANOUT | GBM_BO_USE_WRITE);
 	if(!dev->bo) {
-		logger_fatal("Failed to create GBM_BO");
+		logger_fatal("Failed to create GBM_BO %m");
 		drm_cleanup(dev);
 		return NULL;
 	}
@@ -190,7 +185,7 @@ drm_t *init_drm() {
 	dev->bpp = gbm_bo_get_bpp(dev->bo);
 	dev->height = gbm_bo_get_height(dev->bo);
 	dev->width = gbm_bo_get_width(dev->bo);
-
+	logger_info("%d %d %p %m", dev->handle, dev->height, dev->bo);
 	logger_info("%p %p", dev->buffer, dev->map_data);
 	drmModeAddFB(dev->fd, dev->mode.hdisplay, dev->mode.vdisplay, 24, 32, dev->pitch, dev->handle, &dev->fb);		
 	
@@ -215,12 +210,12 @@ drm_t *init_drm() {
 		}
 	}
 	
+	getchar();
 	//Unmap the buffer 
 	gbm_bo_unmap(dev->bo, (void *)dev->buffer);
 
 	//Sleep for 4 seconds so we have a chance to see what's on 
 	//screen
-	sleep(4);
 	
 	//reset the original CRTC 
 	drmModeSetCrtc(dev->fd, dev->crtc->crtc_id, dev->crtc->buffer_id, dev->crtc->x, dev->crtc->y, &dev->connector->connector_id, 1, &dev->crtc->mode);
@@ -228,7 +223,7 @@ drm_t *init_drm() {
 }
 
 int main(int argc, char **argv) {
-	void *var = init_drm();
+	void *var = init_drm(argv[1]);
 
 
 	if(var != NULL) drm_cleanup(var);
